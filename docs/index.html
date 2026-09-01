@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PIXLZR — Live Demo (coming soon)</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:720px;margin:4rem auto;padding:0 1rem;line-height:1.6;color:#111}
+  h1{font-size:1.8rem;margin-bottom:.25rem}
+  .badge{display:inline-block;background:#000;color:#fff;border-radius:999px;padding:.15rem .6rem;font-size:.8rem;margin-right:.35rem}
+  .card{border:1px solid #e5e7eb;border-radius:12px;padding:1rem 1.2rem;background:#fafafa;margin:1.2rem 0}
+  code{background:#f3f4f6;padding:.15rem .35rem;border-radius:4px;font-size:.9em}
+  a{color:#0a66c2}
+</style>
+<h1>PIXLZR — Live Demo <span style="font-weight:400;font-size:1rem;color:#666">(coming soon)</span></h1>
+<p><span class="badge">Rust</span> <span class="badge">MIT OR Apache-2.0</span> Custom image codec — multithreaded encoder/decoder + 60fps video filter.</p>
+
+<div class="card">
+  <strong>WASM demo — Phase 2.3</strong><br>
+  Drag-drop encode/decode in-browser. Spec: <a href="https://github.com/guiga-zalu/pixlzr/blob/main/docs/wasm-demo-spec.md">docs/wasm-demo-spec.md</a><br>
+  Until then, try locally: <code>cargo run -- encode input.png -o out.pixlzr</code>
+</div>
+
+<div class="card">
+  <strong>Benchmarks — Phase 2.4</strong><br>
+  <code>criterion</code> vs JPEG/PNG/WebP at matched SSIM/PSNR, with hardware spec. See <a href="https://github.com/guiga-zalu/pixlzr/blob/main/benches/README.md">benches/README.md</a>.
+</div>
+
+<p>Track progress: <a href="https://github.com/guiga-zalu/pixlzr">github.com/guiga-zalu/pixlzr</a></p>
+<p><em>Placeholder deployed as P0 hygiene. Last updated: 2026-09-01. Replace with <code>www/index.html</code> via <code>.github/workflows/pages.yml</code> when WASM lands — then switch Pages source to GitHub Actions.</em></p>

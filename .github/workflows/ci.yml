@@ -1,0 +1,74 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-progress runs for same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: fmt / clippy / test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: cargo test
+        run: cargo test --all-features --verbose
+
+  # Optional: verify WASM still compiles (no wasm-pack publish, just check)
+  wasm-check:
+    name: wasm check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo check --target wasm32-unknown-unknown
+        run: cargo check -p pixlzr-core --target wasm32-unknown-unknown --features wasm
+
+  bench:
+    name: criterion bench
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # If datasets are fetched via xtask, add: - run: cargo xtask fetch-data
+      - name: cargo bench
+        run: |
+          cargo bench --features bench -- --output-format bencher | tee bench.txt
+          cat bench.txt
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: cargo
+          output-file-path: bench.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Show alert on regression; tweak threshold as needed
+          alert-threshold: "150%"
+          comment-on-alert: true
+          fail-on-alert: false
