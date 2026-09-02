@@ -38,7 +38,6 @@ jobs:
   wasm-check:
     name: wasm check
     runs-on: ubuntu-latest
-    if: hashFiles('crates/pixlzr-core/Cargo.toml') != ''
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -51,7 +50,7 @@ jobs:
   bench:
     name: criterion bench
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main' && hashFiles('crates/pixlzr-core/Cargo.toml') != ''
+    if: github.ref == 'refs/heads/main'
     needs: [check]
     steps:
       - uses: actions/checkout@v4
