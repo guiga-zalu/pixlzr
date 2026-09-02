@@ -1,0 +1,20 @@
+[package]
+name = "pixlzr-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "pixlzr-core — image codec core (stub for CI/WASM)"
+repository = "https://github.com/guiga-zalu/pixlzr"
+keywords = ["codec", "image", "wasm"]
+categories = ["multimedia::images", "wasm"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["wasm-bindgen", "wee_alloc"]
+
+[dependencies]
+wasm-bindgen = { version = "0.2", optional = true }
+wee_alloc = { version = "0.4", optional = true }

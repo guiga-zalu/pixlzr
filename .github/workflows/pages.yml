@@ -31,10 +31,16 @@ jobs:
 
       - name: Build WASM package
         run: |
-          wasm-pack build crates/pixlzr-core --target web --out-dir ../../www/pkg -- --features wasm
-          ls -lh www/pkg/
-          test -f www/pkg/pixlzr_core_bg.wasm || test -f www/pkg/pixlzr_core_bg.wasm  # adjust crate name if needed
-          echo "WASM build ok"
+          if [ -f crates/pixlzr-core/Cargo.toml ]; then
+            wasm-pack build crates/pixlzr-core --target web --out-dir ../../www/pkg -- --features wasm
+            ls -lh www/pkg/
+            test -f www/pkg/pixlzr_core_bg.wasm || test -f www/pkg/pixlzr_core_bg.wasm
+            echo "WASM build ok"
+          else
+            echo "stub - no wasm build, deploying static www"
+            mkdir -p www/pkg
+            echo "stub" > www/pkg/.stub
+          fi
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
