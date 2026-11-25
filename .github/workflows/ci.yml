@@ -34,6 +34,9 @@ jobs:
       - name: cargo test
         run: cargo test --all-features --verbose
 
+      - name: cargo bench (compile only)
+        run: cargo bench --no-run --features bench
+
   # Optional: verify WASM still compiles (no wasm-pack publish, just check)
   wasm-check:
     name: wasm check

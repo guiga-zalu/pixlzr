@@ -1,146 +1,178 @@
-# PIXLZR - Custom Image Codec & Format in Rust
+# PIXLZR — Density-Aware Image Codec in Rust + WASM
 
 English | [Português (BR)](README.pt-BR.md)
 
-<!-- TODO Phase 2.3/2.4: badges will turn green after CI + Pages land -->
 ![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)
 ![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)
 ![CI](https://github.com/guiga-zalu/pixlzr/actions/workflows/ci.yml/badge.svg)
 ![Pages](https://github.com/guiga-zalu/pixlzr/actions/workflows/pages.yml/badge.svg)
-![Benchmarks](https://img.shields.io/badge/benchmarks-todo-lightgrey)
+![Benchmarks](https://img.shields.io/badge/benchmarks-pending-lightgrey)
 
-> **One-liner:** High-density-aware image compression - custom format, multithreaded Rust encoder/decoder, and 60fps real-time video filtering. Built to preserve detail where it matters.
+> **One-liner:** an image codec with per-block adaptive quantization — 8×8 DCT blocks whose quant step is chosen from local luma gradient density. Smooth blocks keep finer steps (banding is visible there); busy blocks are quantized more coarsely (noise is masked). Custom format, Rust core, CLI, and an in-browser WASM demo that actually encodes and reconstructs the image.
 
-**🎮 Live Demo (WASM):** https://guiga-zalu.github.io/pixlzr/ - _drag-drop any PNG/JPEG → PIXLZR encode → decode in-browser, no install. [How it works](docs/wasm-demo-spec.md)._
+**🎮 Live demo (WASM):** https://guiga-zalu.github.io/pixlzr/ — drag-drop a PNG/JPEG → `.pixlzr` encode → decode → before/after with ratio and timings. Everything runs locally; nothing is uploaded. Build/run instructions below.
 
-![Demo](assets/demo.gif)
-<!-- TODO Phase 2.3: replace with 15s screen capture - drag image → PIXLZR encode/decode + ratio/SSIM overlay. Until WASM lands this 404 is expected and intentional. -->
-<!-- GIF spec: 1280×720, 15s, <4MB, 10–12fps, 128 colors, before/after split + stats panel. See assets/demo-script.md (storyboard) + assets/demo-gif-spec.md (file spec, ffmpeg export, Featured integration). -->
+> **Demo GIF:** not recorded yet. The storyboard and file spec live in [`assets/demo-script.md`](assets/demo-script.md) and [`assets/demo-gif-spec.md`](assets/demo-gif-spec.md).
 
 ---
 
 ## What is PIXLZR?
 
-PIXLZR is an experimental image codec that uses an **information density function** to allocate bits where the eye is most sensitive (edges, high-frequency regions), trading uniform quality for perceptually better results at high compression.
+PIXLZR v1 is a small, honest, dependency-light image codec:
 
-- **Custom format** with encoder/decoder (2023) - see [Architecture](docs/architecture.md) and [Format Spec](docs/format.md)
-- **Rust core** (2022 port), **multithreaded pipeline** (2024, Rayon)
-- **Video path:** real-time filtering at 60fps (1080p target - see [Benchmarks](#benchmarks))
-- Viewer patch for an OSS image viewer to natively open `.pixlzr` files
+- **Format v1** — 27-byte header + per-block quant steps + one zlib stream. Byte-level spec: [`docs/format.md`](docs/format.md).
+- **Real transform** — reversible integer YCoCg, orthonormal 8×8 DCT-II, zigzag scan, `i16` coefficients.
+- **Density-adaptive quantization** — each block's step comes from the mean absolute luma gradient in that block: smooth blocks get finer steps (banding is visible in flats), busy blocks get coarser steps (quantization noise is masked by texture). The exact formula is in the spec and in code.
+- **Native API + CLI** — `encode_rgba` / `decode_rgba` / `inspect`, plus `pixlzr encode|decode|info`.
+- **WASM demo** — the same Rust code compiled to `wasm32-unknown-unknown`, driven by a vanilla ES-module front end (no bundler).
+- **Tests + benches** — round-trip PSNR/ratio assertions, header fuzz-ish rejection tests, and Criterion benches.
 
-> **Status:** Research prototype - API may change. Benchmarks vs JPEG/PNG/WebP at matched SSIM are on the roadmap (see below).
+**Explicitly not implemented yet** (do not assume otherwise):
+
+- Multithreading / Rayon. Both the native path and the WASM demo are **single-threaded**. WASM is single-thread because the demo does not use `SharedArrayBuffer`.
+- The 60 fps video filter, the image-viewer patch, and the learned α/β/γ density model from early design notes.
+- SSIM, perceptual metrics, and matched-quality comparisons against JPEG/PNG/WebP.
+- Lossless mode, alpha coding, metadata, streaming decode, and CRC.
+
+The early design documents ([`docs/architecture.md`](docs/architecture.md), [`docs/wasm-demo-spec.md`](docs/wasm-demo-spec.md)) are kept for context, with status notes where they describe plans rather than shipped code.
 
 ---
 
-## Quick Start
+## Quick start
 
 ```bash
-# Requires Rust stable (1.75+)
-git clone https://github.com/guiga-zalu/pixlzr.git
-cd pixlzr
-cargo install .
+# Requires stable Rust. No system image libraries for the core.
+cargo fmt --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test --all-features
 
-pixlzr --help
-# example (CLI is illustrative - adjust to your binary name/args):
-pixlzr -i input.png -o output.pixlzr
-pixlzr -i output.pixlzr -o restored.png
+# CLI (PNG <-> .pixlzr)
+cargo build --release --features cli
+./target/release/pixlzr encode input.png output.pixlzr --quality 80
+./target/release/pixlzr info output.pixlzr
+./target/release/pixlzr decode output.pixlzr restored.png
+
+# Benchmarks (Criterion)
+cargo bench --features bench
 ```
 
-Or via WASM demo: open https://guiga-zalu.github.io/pixlzr/ and drop an image - see [WASM Demo Spec](docs/wasm-demo-spec.md).
+### WASM demo locally
+
+```bash
+rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --locked   # or use your distro package
+
+wasm-pack build crates/pixlzr-core --target web --out-dir ../../www/pkg -- --features wasm
+python3 -m http.server --directory www 8000
+# open http://localhost:8000 and drop an image
+```
+
+If `www/pkg/` is missing, the demo page shows the build command instead of a stack trace.
 
 ---
 
 ## Architecture
 
 ```
-Input image
-↓
-Detail density map
-↓
-Quantization
-↓
-Multiple types of entropy encoding
-↓
-.pixlzr
-↓
-Entropy decoding -> Decode
-↓
-Dequantize + reconstruct → Output
+RGBA8 ──► reversible YCoCg ──► 8×8 DCT-II ──► quantize (step from local density)
+                                                         │
+                                                         ▼
+                                          zigzag i16 coefficients ──► zlib
+                                                         │
+   .pixlzr  =  header + per-block steps + zlib payload ◄──┘
+
+Decode: parse header → inflate → dequantize → IDCT → inverse YCoCg → clamp → RGBA8
 ```
 
-Full pipeline, threading model and density function → [`docs/architecture.md`](docs/architecture.md).
+Everything lives in `crates/pixlzr-core`; the crate has no I/O (the CLI does).
+The WASM exports are thin wrappers over the same native functions, so the demo
+cannot drift from the codec. Details: [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
-## Format Spec (stub)
+## Format spec
 
-- Magic: `PIXLZR` + 3 octets of semantic versioning
-- Header: width, height, colour space, line starts
-- Blocks: Block header + payload
+Header (little-endian):
 
-Full spec → [`docs/format.md`](docs/format.md) _(todo Phase 2)_.
+| Field | Size |
+|---|---|
+| magic `PIXLZR` + version `1` | 7 bytes |
+| flags (`0`) | 2 bytes |
+| width, height | 4 bytes each |
+| block size (`8`), quality | 1 byte each |
+| blocks_x, blocks_y | 4 bytes each |
+| per-block quant steps | `blocks_x * blocks_y` bytes |
+| zlib stream of zigzag `i16` coefficients | rest of file |
+
+Full normative spec, including the density/quantization formula, zigzag table,
+padding rule, worked hex example and limitations: [`docs/format.md`](docs/format.md).
 
 ---
 
 ## Benchmarks
 
-> **Claims on the CV/old README ("95% reduction", "60fps") are anecdotal until this table is filled with `criterion` runs on pinned hardware.** This section exists to make the gap explicit and verifiable.
+> **No benchmark numbers are published yet.** The table below is intentionally
+> empty; rows will be filled only from Criterion runs on pinned hardware, at
+> matched quality, with the raw output committed. The self-tests assert
+> `PSNR > 30 dB` and `raw/encoded > 2:1` at quality 80 on a synthetic gradient.
 
-| Dataset | PIXLZR (ratio @ SSIM 0.92) | JPEG | PNG | WebP | Enc ms | Dec ms | FPS 1080p |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Kodak (24× 768×512) | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ |
-| CLIC valid | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ |
-| Synthetic high-density | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ | _todo_ |
+| Dataset | PIXLZR (ratio @ matched quality) | JPEG | PNG | WebP | Enc ms | Dec ms | Notes |
+|---|---|---|---|---|---|---|---|
+| Kodak (24× 768×512) | _pending measurement_ | — | — | — | — | — | baseline comparisons not implemented |
+| CLIC valid | _pending measurement_ | — | — | — | — | — | dataset not vendored |
+| Synthetic 512×512 (gradient + LCG noise) | _pending measurement_ | — | — | — | — | — | `cargo bench --features bench` |
 
-**How to reproduce (Phase 2.4):**
+Reproduce the harness:
 
 ```bash
 cargo bench --features bench
-# hardware: CPU model, cores, RAM, OS, rustc --version, RAYON_NUM_THREADS
+# criterion prints mean/median timing estimates; raw JSON under target/criterion/
 ```
 
-Table template: [`benches/bench-table.md`](benches/bench-table.md) (reproducible table, hardware header, PSNR/SSIM + MP/s + FPS 1080p, vs JPEG/PNG/WebP at matched quality) · Runbook: [`docs/pixlzr-bench-runbook.md`](../docs/pixlzr-bench-runbook.md) or `docs/pixlzr-bench-runbook.md` in pipeline repo (criterion, hardware spec, `RAYON_NUM_THREADS`, `gnuplot`)
-
-See [`benches/README.md`](benches/README.md) for harness spec and `docs/pixlzr-audit.md §3` for full bench design (datasets, SSIM/PSNR matching, hardware disclosure).
+The benchmark input is generated deterministically in `benches/codec.rs`
+(gradient + LCG noise), so runs are comparable across machines. Template for
+the eventual matched-quality table: [`benches/bench-table.md`](benches/bench-table.md);
+harness notes: [`benches/README.md`](benches/README.md).
 
 ---
 
 ## Roadmap
 
-- [x] 2021 - density-function codec prototype
-- [x] 2022 - Rust port
-- [x] 2023 - custom format + encoder/decoder + viewer patch
-- [x] 2024 - multithreaded pipeline + 60fps video filter
-- [ ] More internal block formats (delta, transform (DCT, Haar), composed)
-- [ ] Fractal tree block format
-- [ ] **P0** - MIT OR Apache-2.0, topics, EN README, badges, Pages placeholder (this patch)
-- [ ] **Phase 2.3** - WASM live demo on GitHub Pages ([spec](docs/wasm-demo-spec.md))
-- [ ] **Phase 2.4** - `criterion` harness vs JPEG/PNG/WebP, CI (`fmt`/`clippy`/`test`/`bench`) ([spec](benches/README.md))
+- [x] 2021–2022 — density-function experiments, Rust port
+- [x] 2023 — custom format prototype
+- [x] **v1 (this repo state)** — real format + codec, reversible YCoCg, adaptive
+  per-block quantization, native API, CLI (`encode`/`decode`/`info`), WASM
+  exports, drag-drop demo, round-trip tests, Criterion benches, CI + Pages
+- [ ] Lossless mode and alpha coding
+- [ ] Matched-quality benchmarks vs JPEG/PNG/WebP (SSIM/PSNR gate)
+- [ ] Multithreaded encode/decode (Rayon) and a streaming decoder
+- [ ] Better entropy coding (rANS/arithmetic) and adaptive block sizes
+- [ ] Viewer integration for `.pixlzr`
 
 ---
 
 ## Contributing
 
-Issues and PRs welcome. Please run before submitting:
-
 ```bash
 cargo fmt
-cargo clippy -- -D warnings
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-features
+cargo bench --no-run --features bench
 ```
 
-CI enforces the same - see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs the same checks (`.github/workflows/ci.yml`). Format changes must update
+[`docs/format.md`](docs/format.md) in the same PR.
 
 ---
 
 ## License
 
-Dual-licensed under **MIT OR Apache-2.0** - see [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
+Dual-licensed under **MIT OR Apache-2.0** — see [`LICENSE-MIT`](LICENSE-MIT) and [`LICENSE-APACHE`](LICENSE-APACHE).
 
-`SPDX-License-Identifier: MIT OR Apache-2.0` - Copyright (c) 2021–2026 Guilherme Zaluchi
+`SPDX-License-Identifier: MIT OR Apache-2.0` — Copyright (c) 2021–2026 Guilherme Alves Ceobaniuk Zaluchi
 
 ---
 
 ## Citation / Author
 
-Guilherme Zaluchi - [@guiga-zalu](https://github.com/guiga-zalu) · [LinkedIn](https://linkedin.com/in/guilherme-alves-c-zaluchi) · SP, Brasil
+Guilherme Zaluchi — [@guiga-zalu](https://github.com/guiga-zalu) · [LinkedIn](https://linkedin.com/in/guilherme-alves-c-zaluchi) · Ribeirão Pires, SP (Remote)

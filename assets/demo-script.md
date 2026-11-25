@@ -1,24 +1,31 @@
 # PIXLZR — 60-Second Demo Video Script
 
 > **Deliverable:** 15s GIF for README + 60s narrated video for LinkedIn / GitHub social preview.
-> **Source:** screen capture of `https://guiga-zalu.github.io/pixlzr/` WASM demo + `cargo bench` flamegraph.
-> **Tools:** OBS or QuickTime screen capture, 1280×720, 60fps, export H.264 + GIF via `ffmpeg`.
+> **Source:** screen capture of the local `www/` WASM demo (same page as
+> `https://guiga-zalu.github.io/pixlzr/`) and the real CLI.
+> **Tools:** OBS or QuickTime screen capture, 1280×720, 60fps capture, export H.264 + GIF via `ffmpeg`.
+>
+> **Honesty rule for this recording:** only show numbers that are visible on
+> screen from the actual run. Do not hard-code ratio/PSNR/timing values in
+> captions. There are no published benchmark numbers yet, and the codec is
+> single-threaded.
 
 ## Storyboard (60s)
 
 | Time | Visual | Narration / Caption |
 |------|--------|---------------------|
 | 0:00–0:05 | Title card: **PIXLZR — Custom Image Codec in Rust** + badges (Rust, MIT/Apache-2.0) + GitHub URL | "PIXLZR — a custom image codec and format built in Rust." |
-| 0:05–0:15 | Terminal: `cargo run --release -- encode kodak.png -o kodak.pixlzr` → `412 KB → 24 KB (94% · SSIM 0.93)` | "High-density-aware compression — it spends bits where the eye cares: edges and texture." |
-| 0:15–0:30 | Browser WASM demo: drag-drop PNG → instant encode/decode. Slider wipe before/after. Stats panel: **Encode 86ms · Decode 42ms · Ratio 17:1** | "Try it in-browser — drag, drop, compressed. No install — WASM runs the same Rust core." |
-| 0:30–0:42 | Architecture diagram (from `docs/architecture.md` mermaid) + density map heatmap overlay on sample image (red = high density) | "An information density function drives adaptive quantization, multithreaded with Rayon." |
-| 0:42–0:52 | Split screen: terminal `cargo bench` output + `target/criterion/report` flamegraph + benchmark table (PIXLZR vs JPEG/WebP at SSIM 0.92) | "Benchmarked with Criterion — pinned hardware, matched quality, not cherry-picked." |
+| 0:05–0:15 | Terminal: `./target/release/pixlzr encode kodak.png kodak.pixlzr --quality 80` → the tool's real `encoded WxH q80 -> … (N bytes, raw ratio R:1, T ms)` line | "Each 8×8 block gets a quantization step from its local luma gradient — smooth blocks keep finer steps to avoid banding, busy blocks are quantized more coarsely." |
+| 0:15–0:30 | Browser WASM demo: drag-drop PNG → encode/decode. Before/after panes. Stats panel shows the real **Encode ms · Decode ms · file KB -> blob KB (ratio:1)** line | "Try it in-browser — drag, drop, compressed. No install: WASM runs the same Rust core as the CLI." |
+| 0:30–0:42 | Architecture diagram from `docs/architecture.md` (YCoCg → DCT → density → quantize → zlib) | "Reversible YCoCg, an 8×8 DCT, and a per-block step table written into the file. Single-threaded in v1." |
+| 0:42–0:52 | Terminal: `cargo bench --no-run --features bench` then a short `cargo bench --features bench` run showing Criterion's own timing lines | "A Criterion harness is included. Published matched-quality numbers are still pending — I won't quote numbers I haven't measured on pinned hardware." |
 | 0:52–0:60 | Closing card: **Live demo: guiga-zalu.github.io/pixlzr** · **Code: github.com/guiga-zalu/pixlzr** · "Author: Guilherme Zaluchi — Data Engineer · Rust · Ribeirão Pires" | "Open source, MIT OR Apache-2.0. Link in description." |
 
 ## GIF Cut (15s, for README `assets/demo.gif`)
 
-- Trim to **0:15–0:30** (WASM drag-drop + slider + stats).
-- No audio; add burned-in caption: **"Drag image → PIXLZR 94% smaller · SSIM 0.93 · 86ms encode"**.
+- Trim to the WASM drag-drop segment (roughly 0:15–0:30 of the 60s recording).
+- No audio; burned-in caption should use the numbers shown by the demo at
+  capture time, e.g. **"Drag image → PIXLZR encode/decode · ratio and timings in the stats line"**.
 - Export:
 
 ```bash
@@ -29,18 +36,20 @@ ffmpeg -i demo-60s.mp4 -ss 15 -t 15 -vf "fps=12,scale=1280:-1:flags=lanczos,spli
 ## Recording Checklist
 
 - [ ] Clean browser profile (no extensions bar), zoom 100%, dark or light consistent with README.
-- [ ] Sample image: Kodak `kodim23` (parrot, high detail) — shows density map well.
-- [ ] Show real numbers from an actual `cargo bench` run — do not mock table if avoidable; `_todo` is honest until bench lands.
+- [ ] Sample image: Kodak `kodim23` (parrot, high detail) or another image you have the right to publish.
+- [ ] Show the actual demo stats line and actual CLI output — do not edit numbers into the frame.
 - [ ] 1280×720 capture; hide OS dock/notifications.
 - [ ] Add subtitles (SRT) for LinkedIn autoplay (muted by default).
 - [ ] End frame holds 3s for thumbnail.
 
 ## LinkedIn Post Template (after publishing)
 
-> Shipped PIXLZR hygiene: dual MIT/Apache-2.0, EN README, architecture doc + WASM demo spec — live at guiga-zalu.github.io/pixlzr.
-> Rust · multithreaded codec · information-density-aware compression.
-> Benchmarks vs JPEG/PNG/WebP (Criterion, pinned hardware) next.
-> Code: github.com/guiga-zalu/pixlzr #Rust #DataEngineering #ImageCompression
+> Shipped a working PIXLZR v1: custom density-aware image format, Rust codec,
+> CLI (`encode` / `decode` / `info`), and an in-browser WASM demo you can drag an
+> image onto — live at guiga-zalu.github.io/pixlzr.
+> 8×8 DCT + reversible YCoCg + per-block quantization driven by local luma gradient.
+> Single-threaded in v1; matched-quality benchmarks and multithreading are next.
+> Code: github.com/guiga-zalu/pixlzr #Rust #ImageCompression
 
 ## Verification
 
@@ -53,4 +62,5 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_r
 
 ---
 
-*Keep this file in `assets/demo-script.md` in both the pipeline repo and `pixlzr` — it is the single source for the video/GIF spec.*
+*This file is the single source for the video/GIF storyboard. Keep numbers out of
+the script until they come from a committed run.*

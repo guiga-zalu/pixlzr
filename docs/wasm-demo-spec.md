@@ -1,107 +1,83 @@
-# WASM Live Demo — Spec & Build Plan (Phase 2.3)
+# WASM Live Demo — Spec & Build Plan
 
-> **Goal:** `https://guiga-zalu.github.io/pixlzr/` is an interactive proof — drag-drop any PNG/JPEG → PIXLZR encode → decode in-browser → before/after split + ratio + SSIM. No clone, no install. Recruiter test ≤30s.
+> **Status (implemented in v1):** `pixlzr-core` compiles for
+> `wasm32-unknown-unknown` with `--features wasm`, `www/src/index.js` drives the
+> real codec (`encode_rgba`, `decode_rgba`, `image_info`), and
+> `.github/workflows/pages.yml` builds and deploys it. The demo is single-threaded
+> and processes one image at a time.
+>
+> **Still planned (not implemented):** SSIM/perceptual metrics in the UI, the
+> comparison slider, a 4096×4096 pre-downscale flow, and multi-image/video
+> support. Sections below that describe those remain design notes.
+
+## Goal
+
+`https://guiga-zalu.github.io/pixlzr/` is an interactive proof — drag-drop a
+PNG/JPEG → PIXLZR encode → decode in-browser → before/after + ratio + timings.
+No clone, no install. Recruiter test ≤30s.
 
 ## 1. UX Spec
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  PIXLZR — Live Demo                                     │
-│  Drop an image or [Choose file]   [q_base ▾] [Encode]   │
+│  Drop an image or [Choose file]   [quality ────────●]   │
 ├──────────────────────┬──────────────────────────────────┤
 │  Original            │  Decoded (PIXLZR)                │
-│  <canvas>            │  <canvas>   [Slider ◯────]       │
-│  768×512  412 KB     │  24 KB  •  94% smaller • SSIM 0.93│
+│  <canvas>            │  <canvas>                        │
+│  W×H · N KB          │  N KB                            │
 ├──────────────────────┴──────────────────────────────────┤
-│  Stats: Encode 86ms · Decode 42ms · Ratio 17:1          │
+│  Stats: Encode X ms · Decode Y ms · N KB -> M KB (R:1)  │
 │  Download: [ .pixlzr ] [ restored.png ]                 │
-│  Note: WASM single-thread; native is ~2× faster.        │
+│  Note: WASM single-thread; native is also single-thread │
 └─────────────────────────────────────────────────────────┘
 ```
 
 Requirements:
 
 - Accepts `image/png`, `image/jpeg` (reject others with message).
-- Max 4096×4096 or 8MB — larger → preview downscale + warning.
-- Shows: original size, compressed size, **ratio**, **% reduction**, **encode ms**, **decode ms**, **SSIM** (if computed in JS/WASM).
-- Slider or toggle to compare (CSS clip-path or range input).
+- Max 16 777 216 pixels (e.g. 4096×4096) — larger files show an error (no downscale yet).
+- Shows: original size, compressed size, **ratio**, **encode ms**, **decode ms**. SSIM is **not** computed.
+- Before/after panes (a comparison slider is planned, not implemented).
 - Download buttons for `.pixlzr` and restored PNG.
 - Works on Chrome/Firefox/Safari desktop + mobile (responsive); no `SharedArrayBuffer` required.
 
-## 2. Crate Extraction (prerequisite)
+## 2. Crate extraction (done)
 
-WASM cannot compile if core pulls `std::fs`, `rayon`, or CLI deps. Extract:
+`pixlzr-core` has no `std::fs`, no CLI deps and no threading, so it compiles
+unchanged for `wasm32-unknown-unknown`. Actual layout:
 
 ```
-pixlzr/
-├── crates/pixlzr-core/        # NEW — WASM-safe
-│   ├── Cargo.toml
-│   └── src/
-│       ├── lib.rs            # pub encode/decode/density_map
-│       ├── encode.rs
-│       ├── decode.rs
-│       ├── density.rs
-│       └── format.rs
-├── src/main.rs               # thin CLI → calls pixlzr-core
-└── Cargo.toml                # workspace
+crates/pixlzr-core/
+├── src/
+│   ├── lib.rs        public API, PixlzrError, WASM exports, tests
+│   ├── format.rs     header parse/write, limits
+│   ├── color.rs      reversible RGBA <-> YCoCg
+│   ├── dct.rs        orthonormal 8x8 DCT-II + zigzag
+│   ├── encode.rs     density, quant step, block encode
+│   ├── decode.rs     inflate, dequant, IDCT, reconstruct
+│   └── bin/pixlzr.rs CLI behind the `cli` feature
+└── benches/codec.rs  Criterion
 ```
 
-`crates/pixlzr-core/Cargo.toml` template:
+Actual dependencies:
 
 ```toml
-[package]
-name = "pixlzr-core"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-description = "PIXLZR codec core — WASM-safe, no I/O"
-
-[lib]
-crate-type = ["cdylib", "rlib"]
-
 [dependencies]
+miniz_oxide = "0.8"
 wasm-bindgen = { version = "0.2", optional = true }
-js-sys = { version = "0.3", optional = true }
+wee_alloc = { version = "0.4", optional = true }
+png = { version = "0.17", optional = true }
 
 [features]
 default = []
-wasm = ["wasm-bindgen", "js-sys"]
-
-[dependencies.web-sys]
-version = "0.3"
-optional = true
-features = ["console"]
+wasm = ["dep:wasm-bindgen", "dep:wee_alloc"]
+bench = []
+cli = ["dep:png"]
 ```
 
-Root `Cargo.toml` becomes a workspace:
-
-```toml
-[workspace]
-members = ["crates/pixlzr-core"]
-
-[package]
-name = "pixlzr"
-version = "0.1.0"
-edition = "2021"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/guiga-zalu/pixlzr"
-description = "PIXLZR — custom image codec & format in Rust: high-density-aware compression, multithreaded encoder/decoder + 60fps video filter"
-
-[dependencies]
-pixlzr-core = { path = "crates/pixlzr-core" }
-clap = { version = "4", features = ["derive"] }
-rayon = "1.10"
-# ...
-```
-
-Conditional threading in core:
-
-```rust
-#[cfg(not(target_arch = "wasm32"))]
-use rayon::prelude::*;
-#[cfg(target_arch = "wasm32")]
-// single-thread fallback — plain iter
-```
+There is no `js-sys`, `web-sys` or `rayon`: the browser decodes the dropped image
+and does all DOM work, and the codec is single-threaded in both targets.
 
 ## 3. WASM Build Steps
 
@@ -143,43 +119,41 @@ www/
 └── README.md
 ```
 
-`www/src/index.js` skeleton (illustrative):
+`www/src/index.js` (actual flow, simplified):
 
 ```js
-import init, { encode_wasm, decode_wasm } from "../pkg/pixlzr_core.js";
-await init();
+const module = await import("../pkg/pixlzr_core.js"); // dynamic: missing pkg is caught
+await module.default();
 
-const input = document.getElementById("file");
-input.addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const t0 = performance.now();
-  const compressed = encode_wasm(bytes, 0.8); // q_base
-  const t1 = performance.now();
-  const restored = decode_wasm(compressed);
-  const t2 = performance.now();
-  renderCanvases(bytes, restored);
-  updateStats({ original: bytes.length, compressed: compressed.length,
-                encMs: t1-t0, decMs: t2-t1 });
-});
+const bitmap = await createImageBitmap(file);
+// draw to a canvas, then read back RGBA pixels
+const { width, height, data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+
+const blob = module.encode_rgba(width, height, new Uint8Array(data.buffer), quality);
+const restored = module.decode_rgba(blob);
+const [decodedWidth, decodedHeight] = module.image_info(blob);
 ```
 
-WASM exports (in `crates/pixlzr-core/src/lib.rs`):
+WASM exports (`crates/pixlzr-core/src/lib.rs`, `feature = "wasm"`):
 
 ```rust
-#[cfg(feature = "wasm")]
-use wasm_bindgen::prelude::*;
+#[wasm_bindgen(js_name = encode_rgba)]
+pub fn encode_rgba_wasm(w: u32, h: u32, rgba: &[u8], quality: u8)
+    -> Result<Vec<u8>, JsValue>;
 
-#[cfg(feature = "wasm")]
-#[wasm_bindgen]
-pub fn encode_wasm(input: &[u8], q_base: f32) -> Vec<u8> { /* ... */ }
+#[wasm_bindgen(js_name = decode_rgba)]
+pub fn decode_rgba_wasm(blob: &[u8]) -> Result<Vec<u8>, JsValue>; // RGBA bytes
 
-#[cfg(feature = "wasm")]
 #[wasm_bindgen]
-pub fn decode_wasm(input: &[u8]) -> Vec<u8> { /* ... */ }
+pub fn image_info(blob: &[u8]) -> Result<Vec<u32>, JsValue>;      // [w, h]
+
+#[wasm_bindgen]
+pub fn version() -> String;
 ```
 
-Keep exports `Vec<u8>`-based — JS handles PNG decode via `createImageBitmap` + `OffscreenCanvas`, not Rust `image` crate in WASM (keeps bundle small).
+Rust never decodes PNG in WASM; the browser's `createImageBitmap` +
+`getImageData` provides RGBA, keeping the module small. Errors are
+`PixlzrError` strings converted to `JsValue`, surfaced in `#error` by the page.
 
 ## 4. GitHub Pages Deploy
 
@@ -210,9 +184,11 @@ Key steps in the workflow:
 
 Settings → Pages → Source: **GitHub Actions** (not `docs/` branch — Actions source is cleaner for WASM).
 
-### Option B — `docs/` fallback (P0 placeholder)
+### Option B — `docs/` fallback (historical)
 
-If WASM not yet ready, keep `docs/index.html` placeholder so `https://guiga-zalu.github.io/pixlzr/` returns 200. Migrate to Actions source when WASM lands (one toggle in Settings).
+The deployed site is built from `www/` by Actions. The old `docs/` branch-source
+workflow is no longer needed: `docs/index.html` is now a docs hub, and Pages
+stages `docs/*.md` into `www/docs/` so in-app documentation links resolve.
 
 ## 5. Verification Checklist
 
@@ -249,7 +225,7 @@ curl -sI https://guiga-zalu.github.io/pixlzr/ | head -1  # expect HTTP/2 200
 
 - No network calls from WASM — pure compute.
 - Input cap 8MB / 4096×4096 — abort with user-visible error before alloc.
-- `encode_wasm` returns `Result<Vec<u8>, JsValue>` — JS shows `e.message` in `#error`.
+- `encode_rgba` returns `Result<Vec<u8>, JsValue>` — JS shows the error string in `#error`.
 
 ---
 

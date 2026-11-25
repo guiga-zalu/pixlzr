@@ -31,16 +31,18 @@ jobs:
 
       - name: Build WASM package
         run: |
-          if [ -f crates/pixlzr-core/Cargo.toml ]; then
-            wasm-pack build crates/pixlzr-core --target web --out-dir ../../www/pkg -- --features wasm
-            ls -lh www/pkg/
-            test -f www/pkg/pixlzr_core_bg.wasm || test -f www/pkg/pixlzr_core_bg.wasm
-            echo "WASM build ok"
-          else
-            echo "stub - no wasm build, deploying static www"
-            mkdir -p www/pkg
-            echo "stub" > www/pkg/.stub
-          fi
+          wasm-pack build crates/pixlzr-core --target web --out-dir ../../www/pkg -- --features wasm
+          ls -lh www/pkg/
+          test -f www/pkg/pixlzr_core_bg.wasm
+          echo "WASM build ok"
+
+      - name: Stage docs and .nojekyll for Pages
+        run: |
+          mkdir -p www/docs
+          cp docs/*.md www/docs/
+          cp docs/index.html www/docs/index.html
+          touch www/.nojekyll
+          ls -R www | head -n 40
 
       - name: Setup Pages
         uses: actions/configure-pages@v5

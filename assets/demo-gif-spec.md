@@ -15,13 +15,13 @@
 |----------|------|-----|
 | **Path** | `assets/demo.gif` (repo root) | `README.md` references `![Demo](assets/demo.gif)` — relative, works on GitHub + Pages |
 | **Dimensions** | **1280×720** (16:9) — downscale to **960×540** if >4MB | Fits GitHub README width (max ~1012px rendered) without pixelation |
-| **Duration** | **15s** (trimmed from 60s video `0:15–0:30`) | WASM drag-drop + slider + stats — no need for full video in README |
+| **Duration** | **15s** (trimmed from 60s video `0:15–0:30`) | WASM drag-drop + before/after panes + stats — no need for full video in README |
 | **Frame rate** | **10–12 fps** (palette-gen, not full 60fps) | GIF cannot do 60fps sanely; 12fps is smooth enough, keeps file <4MB |
 | **Loop** | Infinite (`-loop 0`) | README auto-loops |
 | **File size** | **<4MB hard limit** (GitHub soft limit ~10MB but README loads slow above 4MB) | If oversize: drop fps to 10, scale to 960, or reduce colors to 64 |
 | **Colors** | **128 max** (palettegen) — 64 if needed for size | Photographic content tolerates 128; dithering on |
-| **Captions** | **Burned-in** text overlay (not relying on narration) | README GIF has no audio: `Drag image → PIXLZR 94% smaller · SSIM 0.93 · 86ms encode` |
-| **Source segment** | WASM demo: drag-drop PNG → instant encode/decode → slider wipe before/after → stats panel | Proves the codec, not just screen capture |
+| **Captions** | **Burned-in** text overlay (not relying on narration) | README GIF has no audio; caption must repeat the real stats line from the capture (no invented numbers) |
+| **Source segment** | WASM demo: drag-drop PNG → instant encode/decode → before/after panes → stats panel | Proves the codec, not just screen capture |
 | **Background** | Clean browser profile, no extensions bar, 100% zoom, light or dark matching README | Dark hero matches GitHub dark mode readability |
 
 **Prohibited:** No cursor spam, no OS dock/notifications, no password/secret in capture, no stock music without license. Sample image must be CC0/Kodak `kodim23` (parrot) or your own photo — not a copyrighted image you don't own.
@@ -74,10 +74,10 @@ file assets/demo.gif  # GIF image data, version 89a
 | Time | Visual | Caption / Narration |
 |------|--------|---------------------|
 | 0:00–0:05 | Title card: **PIXLZR — Custom Image Codec in Rust** + badges + GitHub URL | "PIXLZR — a custom image codec and format built in Rust." |
-| 0:05–0:15 | Terminal: `cargo run --release -- encode kodak.png -o kodak.pixlzr` → `412 KB → 24 KB (94% · SSIM 0.93)` | "High-density-aware — spends bits where the eye cares: edges and texture." |
-| 0:15–0:30 | **WASM demo drag-drop** → slider wipe before/after → stats: **Encode 86ms · Decode 42ms · Ratio 17:1** | "Try it in-browser — drag, drop, compressed. No install — WASM runs the same Rust core." |
-| 0:30–0:42 | Architecture mermaid + density heatmap overlay (red = high density) | "An information density function drives adaptive quantization, multithreaded with Rayon." |
-| 0:42–0:52 | `cargo bench` + `criterion` report + bench table (PIXLZR vs JPEG/WebP @ SSIM 0.92) | "Benchmarked with Criterion — pinned hardware, matched quality." |
+| 0:05–0:15 | Terminal: `./target/release/pixlzr encode kodak.png kodak.pixlzr --quality 80` → the tool's real output line | "Each 8×8 block gets a step from its local luma gradient — smooth blocks keep finer steps; busy blocks are quantized more coarsely." |
+| 0:15–0:30 | **WASM demo drag-drop** → before/after panes → the page's real stats line | "Try it in-browser — drag, drop, compressed. No install — WASM runs the same Rust core." |
+| 0:30–0:42 | Architecture mermaid (YCoCg → DCT → density → quantize → zlib) | "A per-block quantization step from local luma gradient; single-threaded in v1." |
+| 0:42–0:52 | `cargo bench --features bench` showing Criterion's own timing lines | "A Criterion harness is included; published matched-quality numbers are still pending." |
 | 0:52–0:60 | Closing card: **Live demo: guiga-zalu.github.io/pixlzr · Code: github.com/guiga-zalu/pixlzr** | "Open source, MIT OR Apache-2.0. Link in description." |
 
 Full narration script is in `assets/demo-script.md` — this file adds the **file spec + export** only.
@@ -93,7 +93,7 @@ PIXLZR — a custom image codec and format built in Rust.
 
 2
 00:00:05,000 --> 00:00:15,000
-High-density-aware compression — it spends bits where the eye cares.
+Each 8×8 block gets a quantization step from its local luma gradient.
 
 3
 00:00:15,000 --> 00:00:30,000
@@ -101,11 +101,11 @@ Try it in-browser — drag, drop, compressed. No install.
 
 4
 00:00:30,000 --> 00:00:42,000
-An information density function drives adaptive quantization — multithreaded with Rayon.
+A per-block quantization step from local luma gradient — single-threaded in v1.
 
 5
 00:00:42,000 --> 00:00:52,000
-Benchmarked with Criterion — pinned hardware, matched quality.
+A Criterion harness is included; matched-quality numbers are pending.
 
 6
 00:00:52,000 --> 00:01:00,000
@@ -132,9 +132,9 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_r
 ## 3. Recording Checklist (before export)
 
 - [ ] Clean browser profile (no bookmarks bar, no extensions), zoom 100%, capture 1280×720 only
-- [ ] Sample image: **Kodak `kodim23`** (parrot, high detail — shows density map well) or own photo; confirm license
+- [ ] Sample image: **Kodak `kodim23`** (parrot, high detail) or own photo; confirm license
 - [ ] Hide OS dock/taskbar, **Do Not Disturb on**, no notifications
-- [ ] WASM demo served from `https://guiga-zalu.github.io/pixlzr/` or `python3 -m http.server --directory www 8000` — show **real numbers** from `cargo bench` if possible; `_todo_` is honest until bench lands, but prefer real run
+- [ ] WASM demo served from `https://guiga-zalu.github.io/pixlzr/` or `python3 -m http.server --directory www 8000` — show the page's **real** encode/decode stats; do not hard-code numbers
 - [ ] Run through storyboard once before recording — time each chapter with a stopwatch
 - [ ] Record at 1280×720, 60fps canvas; keep mouse movements slow
 - [ ] End frame holds **3s** for thumbnail extraction
@@ -144,34 +144,32 @@ ffprobe -v error -select_streams v:0 -show_entries stream=width,height,r_frame_r
 
 ## 4. README Hero Integration
 
-`README.md` hero block (already in skeleton — keep in sync):
+The README currently links the live demo and says the GIF is not recorded yet.
+Once `assets/demo.gif` exists, add this block near the top (and keep it honest):
 
 ```md
-**🎮 Live Demo (WASM):** https://guiga-zalu.github.io/pixlzr/ — _drag-drop any PNG/JPEG → PIXLZR encode → decode in-browser, no install. [How it works](docs/wasm-demo-spec.md)._
+**🎮 Live Demo (WASM):** https://guiga-zalu.github.io/pixlzr/ — drag-drop a PNG/JPEG → PIXLZR encode → decode, all local. [How it works](docs/wasm-demo-spec.md).
 
 ![Demo](assets/demo.gif)
-<!-- TODO Phase 2.3: replace with 15s screen capture — drag image → PIXLZR encode/decode + ratio/SSIM overlay. Until WASM lands this 404 is expected. -->
-<!-- GIF spec: 1280×720, 15s, <4MB, 10-12fps, 128 colors. See assets/demo-gif-spec.md for export. -->
+<!-- 15s capture of the real demo: drag image → encode/decode + the stats line shown by the page. -->
 ```
 
 Steps to go live:
 
-1. Until WASM lands, `assets/demo.gif` 404 is **expected** — badge shows "benchmarks todo" — that is intentional per `docs/pixlzr-audit.md §2.4`.
-2. When `www/` + WASM is ready, record `demo-60s.mp4` per `assets/demo-script.md` storyboard, export `demo.gif` per `§1.1` above, commit both, and remove the `TODO` comment.
-3. Add `assets/demo.gif` to `MANIFEST.txt` and to `COPY_INSTRUCTIONS.md` copy set.
+1. Record `demo-60s.mp4` per `assets/demo-script.md`, then export `demo.gif` per `§1.1` above.
+2. Add the GIF to the README and remove the "not recorded yet" note.
+3. Keep the caption numbers identical to what the demo/CLI printed during capture.
 
 Do **not** commit `.mov` raw capture — only `demo.gif` + `demo-60s.mp4` + optional `demo-60s.srt`.
-
----
 
 ## 5. LinkedIn Featured Integration
 
 After `demo-60s.mp4` is ready:
 
 1. Upload MP4 to **LinkedIn Featured** (Profile → Featured → Media) + add link to `https://guiga-zalu.github.io/pixlzr/` and `https://github.com/guiga-zalu/pixlzr`.
-2. Pin repos: `pixlzr` + `field-simulator-with-portals-rust` (see `docs/pixlzr-audit.md §2.3`).
+2. Pin the `pixlzr` repo on your profile.
 3. Post template (from `assets/demo-script.md`):
-   > Shipped PIXLZR hygiene: dual MIT/Apache-2.0, EN README, architecture doc + WASM demo spec — live at guiga-zalu.github.io/pixlzr. Rust · multithreaded codec · information-density-aware compression. Benchmarks vs JPEG/PNG/WebP (Criterion, pinned hardware) next. Code: github.com/guiga-zalu/pixlzr #Rust #DataEngineering #ImageCompression
+   > Shipped a working PIXLZR v1: custom density-aware image format, Rust codec, CLI and an in-browser WASM demo — live at guiga-zalu.github.io/pixlzr. 8×8 DCT + per-block quantization from local luma gradient. Single-threaded in v1; matched-quality benchmarks next. Code: github.com/guiga-zalu/pixlzr #Rust #ImageCompression
 4. Verify: Featured shows video thumbnail + plays inline; GitHub social preview (`assets/social-preview.png` 1280×640) appears when sharing repo URL.
 
 ---
@@ -181,7 +179,8 @@ After `demo-60s.mp4` is ready:
 ```bash
 # From repo root (either /auto/portfolio/pixlzr-demo/ or the real pixlzr clone)
 ls -lh assets/demo.gif assets/demo-60s.mp4 2>&1
-# expect: demo.gif <4MB, demo-60s.mp4 <25MB (or "No such file" before recording — that's ok, GIF 404 is expected until Phase 2.3)
+# before recording: "No such file" is expected (the README says so)
+# after recording: demo.gif <4MB, demo-60s.mp4 <25MB
 
 # If files exist:
 ffprobe -v error -select_streams v:0 -show_entries stream=width,height,avg_frame_rate,codec_name -of default=nw=1 assets/demo.gif
@@ -193,4 +192,4 @@ grep -q "guiga-zalu.github.io/pixlzr" README.md && echo "Pages link ok"
 
 ---
 
-*Spec version: 2026-09-01. Storyboard source: `assets/demo-script.md`. Table template: `benches/bench-table.md`. Runbook: `docs/pixlzr-bench-runbook.md` (in /auto).*
+*Spec version: 2026-11-25. Storyboard source: `assets/demo-script.md`. Table template: `benches/bench-table.md`.*

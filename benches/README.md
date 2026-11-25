@@ -1,15 +1,24 @@
-# Benchmark Harness — `criterion` Spec (Phase 2.4)
+# Benchmark Harness — `criterion` Notes
+
+> **Status:** `benches/codec.rs` is implemented (encode/decode on a deterministic
+> 512×512 gradient+noise image) and compiles in CI via
+> `cargo bench --no-run --features bench`. **No numbers are published yet** — the
+> README table stays `_pending measurement_` until both a full run and pinned
+> hardware disclosure exist.
+>
+> The dataset/baseline sections below (Kodak/CLIC downloads, JPEG/PNG/WebP
+> comparisons, `video_filter.rs`, hardware templates) are **plans, not shipped
+> code**. Do not run `cargo bench --bench video_filter` — that benchmark does not
+> exist.
 
 > **Purpose:** Turn "95% reduction / 60fps" from anecdote into a reproducible, hardware-pinned table that a hiring manager can trust and rerun with one command.
 
-## 1. Quick Start (after harness lands)
+## 1. Quick Start
 
 ```bash
 cargo bench --features bench
 # or filtered:
 cargo bench --bench codec -- --sample-size 20
-cargo bench --bench video_filter
-open target/criterion/report/index.html
 ```
 
 CI persists `bench.txt` and posts to `gh-pages` via `benchmark-action/github-action-benchmark`.
@@ -18,51 +27,44 @@ CI persists `bench.txt` and posts to `gh-pages` via `benchmark-action/github-act
 
 ```
 benches/
-├── codec.rs              # criterion main: encode/decode throughput + ratio at matched quality
-├── video_filter.rs       # 1080p frame loop → asserts FPS ≥60
-└── data/
-    ├── kodak/            # 24 images 768×512 — SHA256 manifest, gitignored fetch via xtask
-    ├── clic_valid/       # CLIC validation subset (or Tecnick 100)
-    └── synthetic/        # high-density chart (checkerboard + text) to stress density fn
-    └── MANIFEST.sha256
+└── codec.rs              # criterion: encode/decode at q80 on a generated 512x512 image
 ```
 
-`Cargo.toml` additions:
+Planned (not implemented): `video_filter.rs`, vendored Kodak/CLIC datasets, and
+JPEG/PNG/WebP baseline sweeps. The current benchmark generates its input in code,
+so there are no external data files or SHA256 manifests to fetch.
+
+`Cargo.toml` additions (actual):
 
 ```toml
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = "0.5"
 
 [[bench]]
 name = "codec"
 harness = false
-
-[[bench]]
-name = "video_filter"
-harness = false
 ```
 
-`benches/codec.rs` skeleton:
+`benches/codec.rs` (actual, abridged):
 
 ```rust
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
-use pixlzr_core::{encode, decode};
+use pixlzr_core::{decode_rgba, encode_rgba};
+
+fn synthetic_rgba() -> Vec<u8> { /* gradient + deterministic LCG noise */ }
 
 fn bench_codec(c: &mut Criterion) {
-    let mut group = c.benchmark_group("pixlzr_codec");
-    for (name, bytes) in datasets() { // kodak/clic/synthetic
-        group.bench_with_input(BenchmarkId::new("encode", name), &bytes, |b, data| {
-            b.iter(|| encode(data, &params_for_ssim(0.92)))
-        });
-        group.bench_with_input(BenchmarkId::new("decode", name), &bytes, |b, data| {
-            let enc = encode(data, &params_for_ssim(0.92));
-            b.iter(|| decode(&enc))
-        });
-    }
+    let rgba = synthetic_rgba();
+    let blob = encode_rgba(512, 512, &rgba, 80).unwrap();
+    let mut group = c.benchmark_group("codec");
+    group.throughput(Throughput::Bytes(512 * 512 * 4));
+    group.bench_function("encode_512x512_q80", |b| {
+        b.iter(|| encode_rgba(512, 512, black_box(&rgba), 80).unwrap())
+    });
+    group.bench_function("decode_512x512_q80", |b| {
+        b.iter(|| decode_rgba(black_box(&blob)).unwrap())
+    });
     group.finish();
 }
-criterion_group!(benches, bench_codec);
-criterion_main!(benches);
 ```
 
 ## 3. Datasets — Fixed & Versioned
@@ -140,13 +142,12 @@ RAYON_NUM_THREADS: 8 (and 1 for single-thread baseline)
 Dataset SHA256: <from MANIFEST.sha256>
 ```
 
-Include this block in `benches/README.md` footer and in the `README.md#Benchmarks` reproducer snippet.
+Include this block in the README once a real run exists. `benches/codec.rs`
+currently prints no hardware header; do not publish numbers without one.
 
-Add to `benches/codec.rs` header comment so `cargo bench -- --verbose` prints it.
+## 8. Video 60fps Proof (planned — not implemented)
 
-## 8. Video 60fps Proof
-
-`benches/video_filter.rs`:
+A future `benches/video_filter.rs` would look like:
 
 ```rust
 // Decode + filter a 1080p30 clip (10s, 300 frames) and assert wall-clock FPS ≥60
@@ -170,17 +171,18 @@ Report with/without `multithread` and attach `perf` flamegraph as CI artifact:
 
 - Runs only on `main` to avoid PR noise.
 - Uses `benchmark-action/github-action-benchmark@v1` with `tool: cargo`, `output-file-path: bench.txt`, `auto-push: true` to maintain `gh-pages` bench history.
-- Fails if `criterion` detects regression >10% (configurable).
+- Alerts (comment) on a >150% regression; it does not fail the build
+  (`fail-on-alert: false` in `.github/workflows/ci.yml`).
 
 ## 10. Verification
 
 ```bash
 cargo bench --features bench -- --sample-size 10  # quick smoke
-ls target/criterion/report/index.html && echo "report ok"
 cat bench.txt | head -20
-# expect: hardware header + per-dataset rows with ratio/ssim/ms
+# expect: criterion timing lines for encode_512x512_q80 and decode_512x512_q80
 ```
 
 ---
 
-*Copy this file to `benches/README.md` in `pixlzr`. Pair with `benches/codec.rs` + `benches/video_filter.rs` + `.github/workflows/ci.yml` bench job.*
+*Current implementation: `benches/codec.rs` only. The 60 fps video path and the
+baseline comparisons above are future work; treat their snippets as design notes.*

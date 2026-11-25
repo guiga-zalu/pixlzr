@@ -1,8 +1,8 @@
-# PIXLZR — Reproducible Benchmark Table Template (Phase 2.4)
+# PIXLZR — Reproducible Benchmark Table Template
 
 > **Goal:** Paste this table into `README.md#Benchmarks` after the first `cargo bench` run. Every number ties to a `criterion` report and a pinned hardware disclosure — so "95% reduction / 60fps" stops being marketing and becomes citable engineering.
 >
-> **File:** `benches/bench-table.md` — fill `_todo_` after running `cargo bench --features bench` per `benches/README.md` and `docs/pixlzr-bench-runbook.md`.
+> **File:** `benches/bench-table.md` — fill `_todo_` after running `cargo bench --features bench` per `benches/README.md`.
 >
 > **Matching rule:** Compare at **matched perceptual quality** — sweep baseline quality until **SSIM ≥0.92 (±0.01) and PSNR ≥30 dB**, then compare ratio/throughput. Never compare file sizes at mismatched quality.
 
@@ -10,7 +10,7 @@
 
 ## 0. How to Fill (3 steps)
 
-1. Run benches pinned (`docs/pixlzr-bench-runbook.md`):
+1. Run benches pinned:
    ```bash
    RAYON_NUM_THREADS=8 cargo bench --features bench -- --output-format bencher | tee bench.txt
    RAYON_NUM_THREADS=1 cargo bench --features bench -- --sample-size 20 | tee bench-single.txt
@@ -156,4 +156,4 @@ Simpler: use `criterion-table` or `benchmark-action` chart on `gh-pages` — the
 
 ---
 
-*Template version: 2026-09-01. Source spec: `benches/README.md` + `docs/pixlzr-bench-runbook.md`. Update this file, not README, when re-running benches — then copy `§2` into README.*
+*Template version: 2026-11-25. Source: `benches/README.md`. No rows are filled yet; update this file and the README together after a committed run.*

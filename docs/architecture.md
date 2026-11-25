@@ -1,210 +1,164 @@
-# PIXLZR Architecture
+# PIXLZR Architecture (v1 — implemented)
 
-> **Audience:** hiring manager / Rust reviewer — 3-minute read that proves the codec is not just "a compressor" but a designed system with a threading model and a density rationale.
+> Scope note: this document describes **what the code in this repository actually
+> does**. Earlier revisions described a planned multithreaded, α/β/γ-learned
+> density codec with a 60 fps video path; those parts are not implemented and are
+> marked as future work (§7). The normative byte layout lives in
+> [`format.md`](format.md).
 
-## 1. High-Level Pipeline
+## 1. Pipeline
 
 ```mermaid
 flowchart LR
-    A[Input Image\nRGBA / YCbCr] --> B[Information Density\nFunction]
-    B --> C[Adaptive Quantization\n+ Block Partition]
-    C --> D[Entropy Coding\nrANS / Huffman variant]
-    D --> E[.pixlzr File\nMagic + Header + Payload]
-    E --> F[Entropy Decode]
-    F --> G[Dequantize &\nReconstruct]
-    G --> H[Output Image\n+ SSIM/PSNR check]
+    A[RGBA8 input] --> B[Reversible<br/>integer YCoCg]
+    B --> C[8x8 block partition<br/>edge-replicated padding]
+    C --> D[Density from luma<br/>mean |dx|+|dy|]
+    D --> Q[Per-block quant step<br/>step table]
+    C --> T[Forward DCT-II<br/>8x8, orthonormal]
+    Q --> T
+    T --> Z[Quantize + zigzag<br/>i16 coefficients]
+    Z --> L[zlib level 6]
+    L --> E[.pixlzr v1<br/>header + steps + payload]
 
-    subgraph CLI
-      I[cargo run -- encode] --> A
-      H --> J[cargo run -- decode]
-    end
-
-    subgraph WASM
-      K[Browser drag-drop\nwww/ + pkg/] --> A
-      H --> L[Canvas render\nbefore/after + ratio]
-    end
-
-    style B fill:#ffd86b,stroke:#333,stroke-width:2px
-    style E fill:#8ec8ff,stroke:#333,stroke-width:2px
+    E --> L2[Inflate]
+    L2 --> DQ[Dequantize]
+    DQ --> ID[Inverse DCT]
+    ID --> IC[Inverse YCoCg<br/>+ clamp]
+    IC --> O[RGBA8 output<br/>alpha = 255]
 ```
 
-**Design principle:** spend bits proportional to *local information density*, not uniformly. Flat regions (sky, wall) compress aggressively; edges/textures keep detail — perceptual quality at high ratio.
+Everything runs on one thread, end to end. The core crate does no I/O and has no
+threading dependency, which is what makes the WASM build a thin re-export rather
+than a second implementation.
 
-## 2. Information Density Function
+## 2. Density and quantization
 
-The core novelty. For each 8×8 (or 16×16) block:
+For each padded 8×8 luma block, the encoder sums absolute forward differences to
+the right and down, normalises by `64 * 64`, and clamps to `[0, 1]`:
 
-```
-density(block) = α · gradient_magnitude + β · local_variance + γ · edge_response
-```
+```text
+d = clamp( Σ |Δx| + |Δy| / 4096, 0, 1 )
 
-Where:
-
-| Term | What it captures | Operator |
-|------|------------------|----------|
-| `gradient_magnitude` | edge strength | Sobel / Scharr on luma |
-| `local_variance` | texture busyness | σ² over block vs. 3×3 neighborhood |
-| `edge_response` | structural detail | Laplacian or Canny thin edge count |
-
-Normalized to `[0,1]` per image (histogram equalization), then mapped to a **quantization multiplier**:
-
-```
-q_factor = q_base · (1 + λ · density) ^ -1   // high density → finer quant → more bits
+stepY = clamp(round((4 + 28d) * (1.2 - 0.6 * quality/100)), 4, 64)
+stepC = clamp(2 * stepY, 4, 64)
 ```
 
-- `λ` is tunable (default ~0.8) — controls density sensitivity.
-- Synthetic high-density chart in `benches/data/` stresses this path (checkerboard + text overlay).
+- A flat block (`d = 0`) at quality 0 gets step 4; the same block at quality 100
+  gets step `round(4 * 0.6) = 2 →` clamped to 4 as well, so workable quality is
+  bounded by the format floor.
+- A fully textured block (`d = 1`) at quality 100 gets `round(32 * 0.6) = 19`;
+  lower quality raises it toward 64.
+- Chroma always gets a coarser step (`2×`) because the eye is less sensitive to
+  chroma detail; the value is clamped to 64.
 
-Future: replace hand-tuned α/β/γ with learned weights; keep function pure (`&[u8] -> f32`) for determinism and testability.
+The chosen `stepY` is written into the file's step table, so the decoder does not
+need the original image or the density function. This keeps encode/decode
+independent and makes the format inspectable.
 
-```mermaid
-flowchart TB
-    IMG[Input block 8x8 Y] --> G[Sobel Gx/Gy]
-    IMG --> V[Local variance]
-    IMG --> E[Laplacian edge map]
-    G --> W[Weighted sum\nα·G + β·V + γ·E]
-    V --> W
-    E --> W
-    W --> N[Normalize 0..1\nper-image histeq]
-    N --> Q[Quant multiplier\nq_base · f(density)]
-    Q --> ENC[Encoder bit allocation]
-```
+**Why this is "density-aware":** the step is a function of local gradient energy,
+not a global quality setting. `quality` only scales the whole curve; structure
+inside the image decides where bits go. Note the direction: **busier blocks get
+larger steps (fewer bits)**, because quantization noise is masked by texture,
+while smooth blocks keep finer steps to avoid visible banding.
 
-## 3. Custom Format — `.pixlzr` Layout
-
-```
-Offset  Size    Field
-------  ------  -----
-0       6       Magic: ASCII "PIXLZR" (0x50 49 58 4C 5A 52)
-6       1       Version: u8 (current 0x01)
-7       2       Width:  u16 LE
-9       2       Height: u16 LE
-11      1       Block size: u8 (8 or 16)
-12      4       Density params: α,β,γ,λ as u8 fixed-point (or f32 LE in v2)
-16      N       Quant tables (per-channel, varint length-prefixed)
-...     ...     Payload: entropy-coded blocks, streamable
-EOF-4   4       CRC32 (IEEE) of header+payload
-```
-
-- Payload is **block-order streaming**: decoder can render top-to-bottom without full-file buffer (important for WASM and video).
-- Header is versioned — unknown version → graceful error (not panic).
-
-Full byte-level spec → `docs/format.md` (Phase 2).
-
-```mermaid
-packet-beta
-  0-47: "Magic PIXLZR"
-  48-55: "Ver"
-  56-71: "Width"
-  72-87: "Height"
-  88-95: "BlkSz"
-  96-127: "Density αβγλ"
-  128-255: "Quant tables"
-  256-511: "Payload (blocks)"
-  512-543: "CRC32"
-```
-
-## 4. Encoder → Decoder Data Flow
-
-```mermaid
-sequenceDiagram
-    participant U as User/CLI/WASM
-    participant E as Encoder
-    participant F as Format Writer
-    participant D as Decoder
-    participant O as Output
-
-    U->>E: image bytes + q_base
-    E->>E: RGB→YCbCr, partition blocks
-    E->>E: density(block) per block
-    E->>E: DCT / transform → quantize(q·f(density))
-    E->>E: entropy_encode()
-    E->>F: header + payload + CRC
-    F-->>U: .pixlzr bytes
-    U->>D: .pixlzr bytes
-    D->>D: verify magic/CRC, parse header
-    D->>D: entropy_decode → dequantize → IDCT
-    D->>D: YCbCr→RGB, reassemble
-    D-->>O: restored image + metrics
-```
-
-- Encoder and decoder share `pixlzr-core` (no I/O, no `std::fs`) — same code path for native and `wasm32-unknown-unknown`.
-- Metrics (SSIM/PSNR/ratio) computed outside the hot loop.
-
-## 5. Threading Model
-
-**Goal:** linear scaling to core count for 1080p encode/decode; no data races; deterministic output regardless of thread count.
-
-```mermaid
-flowchart TB
-    subgraph Encode Parallel
-      PART[Partition into N blocks] --> MAP[Rayon par_iter\nblock → density + quant + encode]
-      MAP --> REDUCE[Order-preserving collect\n+ entropy interleave]
-    end
-
-    subgraph Decode Parallel
-      STREAM[Payload stream\nchunk by block row] --> PAR[Rayon par_iter\nchunk → entropy_decode + IDCT]
-      PAR --> ASSEMBLE[Reassemble rows\natomic row counter]
-    end
-
-    subgraph Video Filter 60fps
-      FRAMES[Frame queue\ncrossbeam channel] --> POOL[Thread pool\nRAYON_NUM_THREADS]
-      POOL --> FILTER[Per-frame: decode + filter kernel]
-      FILTER --> VSYNC[Present @ 60Hz\nbackpressure if behind]
-    end
-
-    style MAP fill:#b8f7b8,stroke:#333
-    style PAR fill:#b8f7b8,stroke:#333
-```
-
-Rules:
-
-- **No shared mutable state** in block processing — each block owns its buffer; join via `par_iter().map().collect()`.
-- **Rayon** thread pool sized by `RAYON_NUM_THREADS` (bench pins `8` on 8C/16T); `cargo bench` reports with/without `multithread` feature.
-- Order-preserving: parallel map, sequential write — file is deterministic (`sha256` equal for same input regardless of thread count).
-- WASM build disables `rayon` (no threads in `wasm32-unknown-unknown` without `SharedArrayBuffer`); single-thread fallback via `cfg(target_arch = "wasm32")`.
-- Backpressure in video: if `frames_processed / wall_clock < 60`, drop non-key frames and log — bench `video_filter` asserts `≥60 FPS @1080p`.
+## 3. Format
 
 ```
-Native:  cargo run --release --features multithread  (default)
-WASM:    wasm-pack build --target web --no-default-features --features wasm
-Bench:   RAYON_NUM_THREADS=1 cargo bench  vs  RAYON_NUM_THREADS=8 cargo bench
+Offset  Size        Field
+0       6           magic "PIXLZR"
+6       1           version = 1
+7       2           flags = 0
+9       4           width  (u32 LE)
+13      4           height (u32 LE)
+17      1           block size = 8
+18      1           quality 0..=100 (informational)
+19      4           blocks_x = ceil(width/8)
+23      4           blocks_y = ceil(height/8)
+27      blocks_x*b_y  per-block quant step, u8, raster order
+...     rest        zlib stream of 3*64*i16 zigzag coefficients per block
 ```
 
-## 6. Crate Layout
+There is no CRC, no entropy coder beyond zlib, and no streaming. A malformed
+header is rejected without panicking; a wrong inflated length is rejected as
+`Truncated`. See [`format.md`](format.md) for the exact quant rule, zigzag map,
+padding and a worked 54-byte example.
+
+## 4. Module layout
 
 ```
-pixlzr/
-├── crates/
-│   └── pixlzr-core/          # no_std-compatible core (encode/decode/density) — WASM-safe
-│       └── src/{lib,encode,decode,density,format}.rs
-├── src/main.rs               # CLI (clap) — thin wrapper over core
-├── benches/{codec,video_filter}.rs  # criterion
-├── www/  (or demo/)          # wasm-pack pkg/ + JS glue + index.html
-├── docs/{architecture,format,wasm-demo-spec}.md
-└── .github/workflows/{ci,pages}.yml
+crates/pixlzr-core/
+├── src/
+│   ├── lib.rs        public API, PixlzrError, WASM exports, tests
+│   ├── format.rs     header parse/write, limits, validation
+│   ├── color.rs      RGBA <-> YCoCg
+│   ├── dct.rs        orthonormal DCT-II, zigzag
+│   ├── encode.rs     block loop, density, quant step, zlib
+│   ├── decode.rs     inflate, dequant, IDCT, reconstruct
+│   └── bin/pixlzr.rs CLI (feature `cli`)
+├── benches/codec.rs  Criterion encode/decode benchmarks
+└── Cargo.toml
+www/                  vanilla JS demo (wasm-pack `web` target)
 ```
 
-Extraction rule: everything that touches `std::fs`, `clap`, or OS threads stays out of `pixlzr-core`. Core exposes:
+Public surface:
 
 ```rust
-pub fn encode(input: &Image, params: &EncodeParams) -> Result<Vec<u8>, PixlzrError>
-pub fn decode(bytes: &[u8]) -> Result<Image, PixlzrError>
-pub fn density_map(luma: &[u8], width: usize, height: usize) -> Vec<f32>
+pub struct Image { pub width: u32, pub height: u32 }
+
+pub fn encode_rgba(w: u32, h: u32, rgba: &[u8], quality: u8)
+    -> Result<Vec<u8>, PixlzrError>;
+pub fn decode_rgba(blob: &[u8]) -> Result<(Image, Vec<u8>), PixlzrError>;
+pub fn inspect(blob: &[u8]) -> Result<Image, PixlzrError>;
+pub fn inspect_header(blob: &[u8]) -> Result<HeaderInfo, PixlzrError>;
 ```
 
-## 7. Performance Notes
+WASM (`feature = "wasm"`) exposes `encode_rgba`, `decode_rgba`, `image_info`,
+`version`; errors become `JsValue` strings.
 
-- Hot paths: density map (~15% of encode), DCT/quant (~40%), entropy (~30%) — flamegraph in `cargo bench` artifact.
-- 60fps claim requires: 1080p, `RAYON_NUM_THREADS=8`, Ryzen 7 5800X-class CPU, `performance` governor — see `benches/README.md` hardware disclosure template.
-- WASM is ~1.8–2.5× slower than native (measured; no threading) — acceptable for demo (<500ms for 768×512 Kodak on M1).
+## 5. Single-thread model
 
-## 8. Roadmap Hooks
+- Encoder: sequential raster loop over blocks. Each block is independent, so a
+  future parallel implementation could map blocks and then concatenate in order
+  without changing the file format.
+- Decoder: same, sequential.
+- The WASM build runs on the main thread; no `SharedArrayBuffer`, no workers.
 
-- v2 format: `f32` density params, adaptive block size quadtree.
-- `wee_alloc` optional for WASM footprint.
-- `cargo xtask` to fetch bench datasets with SHA256 manifest.
+**Not implemented:** Rayon, thread pools, order-preserving parallel collect, or
+any multithreaded video path. README and bench docs must not claim otherwise.
 
----
+## 6. Verification
 
-*This doc is the source for the repo social preview diagram. Export the mermaid above (first pipeline) as 1280×640 PNG → `assets/social-preview.png`.*
+- Unit tests (in `src/lib.rs`): PSNR > 30 dB and ratio > 2:1 at quality 80 on a
+  synthetic gradient; header-only inspection; bad magic/version/flags; truncated
+  header and payload; inconsistent block grid; short RGBA buffer; odd sizes.
+- CLI round-trip: PNG → `.pixlzr` → PNG, measured PSNR against the source.
+- WASM round-trip: `wasm-pack build --target nodejs` + a Node script asserting
+  non-empty output, `[w, h]`, and `w*h*4` decoded bytes.
+- Criterion: `benches/codec.rs` on a deterministic 512×512 gradient+noise image.
+
+No SSIM, no Butteraugli, no JPEG/PNG/WebP baselines are implemented.
+
+## 7. Future work (not shipped)
+
+```mermaid
+flowchart TB
+    A[Parallel block encode<br/>Rayon] --> B[Streaming decode<br/>block-row chunks]
+    B --> C[Better entropy coding<br/>rANS / arithmetic]
+    C --> D[Adaptive block sizes<br/>quadtree]
+    D --> E[Lossless + alpha<br/>format v2]
+```
+
+Other planned work: measured matched-quality comparisons against standard codecs,
+a viewer plugin, and a video filter. None of these are in the current build.
+
+## 8. Performance notes
+
+The benchmark harness exists but no published numbers do. The implementation is
+deliberately naïve (direct 2D DCT with a precomputed 8×8 basis, one zlib stream),
+so absolute throughput is not the point of v1 — correctness, inspectability and a
+real end-to-end demo are. Reproduce locally:
+
+```bash
+cargo bench --features bench
+# prints timing estimates; no numbers are committed
+```
